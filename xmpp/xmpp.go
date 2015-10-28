@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -85,6 +86,33 @@ type Client struct {
 	shutdownOnce                 sync.Once
 }
 
+func lookupSRVPermissive(domain string) ([]*net.SRV, error) {
+	_, srvs, err := net.LookupSRV(clientSrv, "tcp", domain)
+
+	// Success!
+	if err == nil && len(srvs) > 0 {
+		return srvs, nil
+	}
+
+	if err != nil {
+		err = fmt.Errorf("LookupSrv %s: %v", domain, err)
+	}
+
+	if len(srvs) == 0 {
+		err = fmt.Errorf("LookupSrv %s: no results", domain)
+	}
+
+	// Go one domain up:
+	splitDomain := strings.SplitN(domain, ".", 2)
+
+	// Nothing to split:
+	if len(splitDomain) <= 1 {
+		return nil, err
+	}
+
+	return lookupSRVPermissive(strings.Join(splitDomain[1:], "."))
+}
+
 // Creates an XMPP client identified by the given JID, authenticating
 // with the provided password and TLS config. Zero or more extensions
 // may be specified. The initial presence will be broadcast. If status
@@ -93,12 +121,10 @@ func NewClient(jid *JID, password string, tlsconf tls.Config, exts []Extension,
 	pr Presence, status chan<- Status) (*Client, error) {
 
 	// Resolve the domain in the JID.
-	_, srvs, err := net.LookupSRV(clientSrv, "tcp", jid.Domain())
+	srvs, err := lookupSRVPermissive(jid.Domain())
+
 	if err != nil {
-		return nil, fmt.Errorf("LookupSrv %s: %v", jid.Domain, err)
-	}
-	if len(srvs) == 0 {
-		return nil, fmt.Errorf("LookupSrv %s: no results", jid.Domain)
+		return nil, err
 	}
 
 	var tcp *net.TCPConn
